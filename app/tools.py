@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+from uuid import uuid4
+
 """第3回: エージェントに持たせるツール。
 
 ここに書いた関数の docstring と型ヒントが、そのままモデルへの「ツールの説明文」になる。
@@ -77,3 +80,51 @@ def get_lecture_summary(lecture: int) -> str:
         available = sorted(p.stem for p in (DATA_DIR / "lectures").glob("*.md"))
         return f"第{lecture}回の要点はまだありません。用意されている回: {', '.join(available)}"
     return path.read_text(encoding="utf-8")
+
+def make_quiz(lecture: int) -> str:
+    """指定した回の用語集から、確認問題を1問とその答えを返す。
+
+    「第2回の確認問題を出して」のように、
+    利用者が講義内容の理解を確認したいときに使う。
+    """
+    terms = [
+        term for term in load_glossary()
+        if term["lecture"] == lecture
+    ]
+
+    if not terms:
+        return f"第{lecture}回の用語は見つかりませんでした。"
+
+    term = terms[0]
+
+    return json.dumps(
+        {
+            "question": f"「{term['term']}」とは何ですか？",
+            "answer": term["definition"],
+        },
+        ensure_ascii=False,
+    )
+
+def save_learning_log(title: str, content: str) -> str:
+    """学習内容の保存を頼まれたとき、学習記録をファイルに保存する。
+
+    title は記録の題名、content は保存する学習内容。
+    このツールは、利用者の承認を得てから実行する。
+    """
+    log_dir = Path(__file__).resolve().parent.parent / "learning_log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now(timezone.utc)
+    filename = f"{now:%Y%m%dT%H%M%S}_{uuid4().hex}.json"
+    path = log_dir / filename
+
+    record = {
+        "title": title,
+        "content": content,
+        "created_at": now.isoformat(),
+    }
+
+    with path.open("x", encoding="utf-8") as f:
+        json.dump(record, f, ensure_ascii=False, indent=2)
+
+    return f"学習記録を保存しました: {path}"

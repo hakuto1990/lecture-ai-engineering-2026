@@ -1,6 +1,3 @@
-from datetime import datetime, timezone
-from uuid import uuid4
-
 """第3回: エージェントに持たせるツール。
 
 ここに書いた関数の docstring と型ヒントが、そのままモデルへの「ツールの説明文」になる。
@@ -10,6 +7,8 @@ from uuid import uuid4
 import json
 from functools import cache
 from pathlib import Path
+
+from app.config import api_error_message
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 MAX_RESULTS = 3
@@ -81,50 +80,49 @@ def get_lecture_summary(lecture: int) -> str:
         return f"第{lecture}回の要点はまだありません。用意されている回: {', '.join(available)}"
     return path.read_text(encoding="utf-8")
 
-def make_quiz(lecture: int) -> str:
-    """指定した回の用語集から、確認問題を1問とその答えを返す。
 
-    「第2回の確認問題を出して」のように、
-    利用者が講義内容の理解を確認したいときに使う。
+def search_materials(query: str) -> str:
+    """第1〜3回の本講義資料を検索し、関連ページの本文・タイトル・ページ番号を返す。
+
+    queryに調べたい内容を指定する。
     """
-    terms = [
-        term for term in load_glossary()
-        if term["lecture"] == lecture
-    ]
+    from google.genai.errors import APIError
+    import sqlite3
+    from app.retrieval import search
 
-    if not terms:
-        return f"第{lecture}回の用語は見つかりませんでした。"
+    try:
+        return json.dumps({"results": search(query)}, ensure_ascii=False)
+    except (ValueError, FileNotFoundError, sqlite3.Error) as e:
+        return json.dumps({"error": str(e), "results": []}, ensure_ascii=False)
+    except APIError as e:
+        return json.dumps({"error": api_error_message(e.code), "results": []}, ensure_ascii=False)
 
-    term = terms[0]
 
-    return json.dumps(
-        {
-            "question": f"「{term['term']}」とは何ですか？",
-            "answer": term["definition"],
-        },
-        ensure_ascii=False,
-    )
+def browse_tree(node_id: str | None = None) -> str:
+    """目次とページの先頭文を返す。ページIDを指定すると全文を返す。
 
-def save_learning_log(title: str, content: str) -> str:
-    """学習内容の保存を頼まれたとき、学習記録をファイルに保存する。
-
-    title は記録の題名、content は保存する学習内容。
-    このツールは、利用者の承認を得てから実行する。
+    最初はnode_idを省略する。続いて返されたIDを指定して目次をたどる。
     """
-    log_dir = Path(__file__).resolve().parent.parent / "learning_log"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    from app.retrieval import browse_tree as browse
 
-    now = datetime.now(timezone.utc)
-    filename = f"{now:%Y%m%dT%H%M%S}_{uuid4().hex}.json"
-    path = log_dir / filename
+    try:
+        return json.dumps(browse(node_id), ensure_ascii=False)
+    except (ValueError, OSError) as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
 
-    record = {
-        "title": title,
-        "content": content,
-        "created_at": now.isoformat(),
-    }
 
-    with path.open("x", encoding="utf-8") as f:
-        json.dump(record, f, ensure_ascii=False, indent=2)
+def search_graph(query: str) -> str:
+    """資料を検索し、前後ページ・共通用語をたどって関連ページの本文と引用情報を返す。
 
-    return f"学習記録を保存しました: {path}"
+    queryに調べたい内容を指定する。
+    """
+    import sqlite3
+    from google.genai.errors import APIError
+    from app.retrieval import search_graph as search
+
+    try:
+        return json.dumps(search(query), ensure_ascii=False)
+    except (ValueError, OSError, sqlite3.Error) as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    except APIError as e:
+        return json.dumps({"error": api_error_message(e.code)}, ensure_ascii=False)

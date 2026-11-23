@@ -123,19 +123,59 @@ def open_index(path: Path):
     finally:
         db.close()
 
-
 def search(query: str) -> list[dict]:
-    """質問を埋め込み、近いページを最大RAG_TOP_K件返す。"""
+    """ベクトル検索したページと、その前後1ページを返す。"""
     if not isinstance(query, str) or not query.strip():
         raise ValueError("検索語が空です。")
+
     with open_index(RAG_DB) as db:
         vector = embed_text(query.strip(), "RETRIEVAL_QUERY")
+
+        # ① 通常のベクトル検索
         rows = db.execute("""
-            SELECT page_id, document_id, lecture, document_title, section, title, page, content,
+            SELECT page_id, document_id, lecture, document_title,
+                   section, title, page, content,
                    vec_distance_cosine(embedding, ?) AS distance
-            FROM chunks ORDER BY distance, page_id LIMIT ?
+            FROM chunks
+            ORDER BY distance, page_id
+            LIMIT ?
         """, (sqlite_vec.serialize_float32(vector), RAG_TOP_K))
-        return [dict(row) for row in rows]
+
+        hits = [dict(row) for row in rows]
+
+        # ② 同じ資料内の前後1ページを取得
+        results = []
+        seen = set()
+
+        for hit in hits:
+            document_id = hit["document_id"]
+            page_number = hit["page"]
+
+            neighbors = db.execute("""
+                SELECT page_id, document_id, lecture,
+                       document_title, section, title,
+                       page, content
+                FROM chunks
+                WHERE document_id = ?
+                  AND page BETWEEN ? AND ?
+                ORDER BY page
+            """, (
+                document_id,
+                page_number - 1,
+                page_number + 1
+            ))
+
+            for row in neighbors:
+                item = dict(row)
+
+                # 同一ページの重複を防止
+                if item["page_id"] in seen:
+                    continue
+
+                seen.add(item["page_id"])
+                results.append(item)
+
+        return results
 
 
 def search_graph(query: str) -> dict:
